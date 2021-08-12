@@ -1,0 +1,386 @@
+---
+title: "Introduction to Bioinformatics Final Project 236523"
+author: "Ben Filiarsky 207941287, Yotam Martin 308044296"
+output:
+  html_notebook: default
+---
+# Load data
+```{r}
+library(R.utils);
+
+library(tidyverse);
+
+library(SummarizedExperiment);
+
+
+# Load summary of the expression results
+load("E-GEOD-78936-atlasExperimentSummary.Rdata")
+
+# Get the coldata
+coldata <- as.data.frame(colData(experimentSummary$rnaseq))
+
+# One option to read is from the experimentSummary
+# But this doesn't have the gene name
+# countdata <- assay(experimentSummary$rnaseq)
+
+# Second option is to read the raw counts from Atlas with the gene name
+countdata <- read_tsv("E-GEOD-78936-raw-counts.tsv") 
+                    
+```
+
+# Arrange data
+```{r}
+# Change brain regions name to a shorter description
+coldata <-
+  coldata %>% mutate(region = ifelse(
+    organism_part == 'Brodmann (1909) area 11',
+    'BA11',
+    ifelse(organism_part == 'Brodmann (1909) area 9', 'BA9', 'BA24')
+  ))
+coldata$organism_part <- NULL
+
+# Replace space with underscore in disease name
+coldata$disease <- gsub(" ", "_", coldata$disease)
+```
+
+```{r}
+genes_to_rownames <- function(data) {
+  # Set the GeneID to be the index and concate the GeneName to the GeneID
+  data <-  mutate(data, GeneId = paste(GeneID, GeneName, sep = "_"))
+  data <-
+    data %>% remove_rownames %>% column_to_rownames(var = "GeneId") %>% as.data.frame()
+  
+  # Delete Gene ID column
+  data[["GeneID"]] <- NULL
+  data[["GeneName"]] <- NULL
+  data[["GeneId"]] <- NULL
+  
+  return(data)
+}
+```
+
+# WGCNA function
+```{r}
+select_samples_wgcna <- function(status, regions, counts_, coldata_) {
+  # Filter the coldata to relevant disease status and brain region
+  
+  control <- coldata_ %>%
+    filter((disease == "normal") &
+             region %in% regions)
+  
+  if (status == "disease") {
+    disease <- coldata_ %>%
+      filter((disease != "normal") &
+               region %in% regions)
+  } else{
+    disease <- coldata_ %>%
+      filter((disease == status) &
+               region %in% regions)
+  }
+  
+  # Get only relevant columns
+  ctrl_counts <-
+    counts_ %>% select(c('GeneID', 'GeneName', rownames(control)))
+  dis_counts <-
+    counts_ %>% select(c('GeneID', 'GeneName', rownames(disease)))
+  
+  # Set the GeneID to be the index and concate the GeneName to the GeneID
+  ctrl_counts <- genes_to_rownames(ctrl_counts)
+  dis_counts <- genes_to_rownames(dis_counts)
+  
+  return (list("control" = ctrl_counts, "disease" = dis_counts))
+}
+```
+
+# Preprocess genes
+```{r}
+preprocess_genes <- function(multiExpr) {
+  gsg = goodSamplesGenesMS(multiExpr, verbose = 3)
+  
+  if (!gsg$allOK) {
+    # Print information about the removed genes:
+    if (sum(!gsg$goodGenes) > 0) {
+      printFlush(paste("Removing genes:", paste(names(multiExpr[[1]]$data)[!gsg$goodGenes],
+                                                collapse = ", ")))
+    }
+    for (set in 1:exprSize$nSets) {
+      if (sum(!gsg$goodSamples[[set]])) {
+        printFlush(paste("In set",
+                         setLabels[set],
+                         "removing samples"))
+        deleted_genes <-
+          rownames(multiExpr[[set]]$data)[!gsg$goodSamples[[set]]]
+      }
+      # Remove the offending genes and samples
+      multiExpr[[set]]$data = multiExpr[[set]]$data[gsg$goodSamples[[set]],
+                                                    gsg$goodGenes]
+    }
+  }
+  # Update exprSize
+  exprSize = checkSets(multiExpr)
+  return (list("multiExpr" = multiExpr, "exprSize" = exprSize))
+}
+```
+
+# Plot clusters
+```{r}
+sample_plot <- function(multiExpr, nSets, file_name) {
+  # Plot dendogram for sample clustering
+  sampleTrees = list()
+  for (set in 1:nSets) {
+    sampleTrees[[set]] = hclust(dist(multiExpr[[set]]$data), method = "average")
+  }
+  pdf(
+    file = paste("Plots/", file_name, ".pdf", sep = ""),
+    width = 12,
+    height = 12
+  )
+  
+  par(mfrow = c(2, 1))
+  par(mar = c(0, 4, 2, 0))
+  for (set in 1:nSets)
+    plot(
+      sampleTrees[[set]],
+      main = paste("Sample clustering on all genes in", setLabels[set]),
+      xlab = "",
+      sub = "",
+      cex = 0.7
+    )
+  
+  dev.off()
+}
+```
+
+# Hyperparameter tuning
+```{r}
+hyperparameter_tuning <- function(disease_data, plot_title) {
+  # Adapted from https://horvath.genetics.ucla.edu/html/CoexpressionNetwork/Rpackages/WGCNA/Tutorials/Consensus-NetworkConstruction-auto.pdf
+  # Choose a set of soft-thresholding powers
+  jpeg(paste("Plots/Hyperparameters/", plot_title, ".jpeg", sep = ""))
+  powers = c(c(1:10), seq(from = 12, to = 20, by = 2))
+  # Call the network topology analysis function
+  sft = pickSoftThreshold(disease_data, powerVector = powers, verbose = 3)
+  # Plot the results:
+  sizeGrWindow(9, 5)
+  par(mfrow = c(1, 2))
+  
+  cex1 = 0.9
+  
+  # Scale-free topology fit index as a function of the soft-thresholding power
+  plot(
+    sft$fitIndices[, 1],
+    -sign(sft$fitIndices[, 3]) * sft$fitIndices[, 2],
+    xlab = "Soft Threshold (power)",
+    ylab = "Scale Free Topology Model Fit,signed R^2",
+    type = "n",
+    main = paste("Scale independence", plot_title)
+  )
+  
+  text(
+    sft$fitIndices[, 1],
+    -sign(sft$fitIndices[, 3]) * sft$fitIndices[, 2],
+    labels = powers,
+    cex = cex1,
+    col = "red"
+  )
+  
+  # this line corresponds to using an R^2 cut-off of h
+  abline(h = 0.90, col = "red")
+  # Mean connectivity as a function of the soft-thresholding power
+  plot(
+    sft$fitIndices[, 1],
+    sft$fitIndices[, 5],
+    xlab = "Soft Threshold (power)",
+    ylab = "Mean Connectivity",
+    type = "n",
+    main = paste("Mean connectivity", plot_title)
+  )
+  text(
+    sft$fitIndices[, 1],
+    sft$fitIndices[, 5],
+    labels = powers,
+    cex = cex1,
+    col = "red"
+  )
+  dev.off()
+}
+```
+
+# Build WGCNA networks
+```{r}
+train_net <-
+  function(disease_data,
+           file_name,
+           power_ = 14,
+           minSize = 30) {
+    # Adapted from https://horvath.genetics.ucla.edu/html/CoexpressionNetwork/Rpackages/WGCNA/Tutorials/Consensus-NetworkConstruction-auto.pdf 
+    # Construct a WGCNA Net using the given hyperparameters
+    net = blockwiseModules(
+      disease_data,
+      power = power_,
+      TOMType = "unsigned",
+      minModuleSize = minSize,
+      reassignThreshold = 0,
+      mergeCutHeight = 0.25,
+      numericLabels = TRUE,
+      pamRespectsDendro = FALSE,
+      saveTOMs = FALSE,
+      verbose = 3
+    )
+    save(net, file = file_name)
+    return (net)
+  }
+```
+
+# Run Hyperparameter tuning
+```{r}
+# BiocManager::install("WGCNA")
+library("WGCNA");
+
+options(stringsAsFactors = FALSE)
+
+options = expand.grid(
+  status = c("schizophrenia", "bipolar_disorder", "disease"),
+  region = c("BA9", "BA11", "BA24")
+)
+setLabels <- c("control", "disease")
+nSets <- 2
+for (i in 1:nrow(options)) {
+  #filtering by status and region, preprocessing genes, some sample plots (?), hyperparameter tuning plots
+  status <- as.character(options[i, 1])
+  region <- as.character(options[i, 2])
+  samples_wgcna <-
+    select_samples_wgcna(status, c(region), countdata, coldata)
+  multiExpr = vector(mode = "list", length = nSets)
+  multiExpr[[1]] = list(data = as.data.frame(t(samples_wgcna$control)))
+  multiExpr[[2]] = list(data = as.data.frame(t(samples_wgcna$disease)))
+  exprSize <- checkSets(multiExpr)
+  preprocess_res <- preprocess_genes(multiExpr)
+  multiExpr <- preprocess_res$multiExpr
+  exprSize <- preprocess_res$exprSize
+  sample_plot(multiExpr, nSets, paste(status, region, sep = "_"))
+  hyperparameter_tuning(multiExpr[[2]]$data, paste(status, region, sep =
+                                                     "_"))
+}
+```
+
+Hyperparametrs were chosen manually according to the above plots.
+
+# GO / DO Analysis
+```{r}
+library(EnsDb.Hsapiens.v86);
+library(clusterProfiler);
+library(enrichplot);
+library(DOSE);
+
+hsens <- EnsDb.Hsapiens.v86
+powers <- c(20, 10, 8, 3, 5, 12, 10, 5, 14)
+# Net creation and GO/DO emapplots
+for (i in 1:nrow(options)) {
+  status <- as.character(options[i, 1])
+  region <- as.character(options[i, 2])
+  samples_wgcna <-
+    select_samples_wgcna(status, c(region), countdata, coldata)
+  multiExpr = vector(mode = "list", length = nSets)
+  multiExpr[[1]] = list(data = as.data.frame(t(samples_wgcna$control)))
+  multiExpr[[2]] = list(data = as.data.frame(t(samples_wgcna$disease)))
+  exprSize <- checkSets(multiExpr)
+  preprocess_res <- preprocess_genes(multiExpr)
+  multiExpr <- preprocess_res$multiExpr
+  exprSize <- preprocess_res$exprSize
+  status_region <- paste(status, region, sep = "_")
+  net_file <- paste("Nets/net_", status_region, ".RData", sep = "")
+  if (!file.exists(net_file)) {
+    net <- train_net(multiExpr[[2]]$data,
+                     file_name = net_file,
+                     power = powers[i])
+  } else{
+    load(net_file)
+  }
+  grouped <- tibble(
+    gene = names(net$colors),
+    color = labels2colors(net$colors),
+    cluster = net$colors
+  )
+  grouped$gene <-
+    vapply(strsplit(grouped$gene, "_"), `[`, 2, FUN.VALUE = character(1))
+  # go over all clusters
+  print(paste("Number of Clusters for",
+              status,
+              region,
+              "is:",
+              length(unique(grouped$cluster))))
+  for (cls in unique(grouped$cluster)) {
+    group_i <- grouped %>% dplyr::filter(cluster == cls)
+    gene_list <- group_i$gene
+    gene_list <- AnnotationDbi::select(
+      hsens,
+      keys = gene_list,
+      columns = c("ENTREZID", "SYMBOL", "GENEID"),
+      keytype = "SYMBOL"
+    )
+    ego <- tryCatch({
+      GOenr = enrichGO(gene_list$ENTREZID, 'org.Hs.eg.db', ont = 'BP')
+      GOenr <- setReadable(GOenr, 'org.Hs.eg.db', 'ENTREZID')
+      ego <- pairwise_termsim(GOenr)
+    },
+    error = function(e) {
+      print(paste("Error occured in:", status_region))
+      print(e)
+      return (NA)
+    })
+    edo <- tryCatch({
+      DOenr <- enrichDO(gene_list$ENTREZID)
+      DOenr <- setReadable(DOenr, 'org.Hs.eg.db', 'ENTREZID')
+      edo <- pairwise_termsim(DOenr)
+    },
+    error = function(e) {
+      print(paste("Error occured in:", status_region))
+      print(e)
+      return (NA)
+    })
+    if (!is.na(ego) &&
+        nrow(ego@result[which(ego@result$p.adjust < ego@pvalueCutoff), ]) > 0) {
+      png(
+        file = paste(
+          "Plots/GO/",
+          i,
+          "/",
+          status_region,
+          "_",
+          cls,
+          "_barplot.png",
+          sep = ""
+        ),
+        width = 1400,
+        height = 960,
+        res = 125
+      )
+      print(emapplot(ego))
+      print(barplot(ego, showCategory = 20))
+      dev.off()
+    }
+    if (!is.na(edo) &&
+        nrow(edo@result[which(edo@result$p.adjust < edo@pvalueCutoff), ]) > 0) {
+      png(
+        file = paste(
+          "Plots/DO/",
+          i,
+          "/",
+          status_region,
+          "_",
+          cls,
+          "_barplot.png",
+          sep = ""
+        ),
+        width = 1400,
+        height = 960,
+        res = 125
+      )
+      print(emapplot(edo))
+      print(barplot(edo, showCategory = 20))
+      dev.off()
+    }
+  }
+}
+```

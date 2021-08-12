@@ -1,0 +1,196 @@
+---
+title: "Introduction to Bioinformatics Final Project 236523"
+author: "Ben Filiarsky 207941287, Yotam Martin 308044296"
+output:
+  html_notebook: default
+---
+
+# Load data
+```{r message=FALSE, warning=FALSE}
+library(R.utils);
+library(tidyverse);
+library(SummarizedExperiment);
+
+# Load summary of the expression results 
+load("E-GEOD-78936-atlasExperimentSummary.Rdata")
+
+# Get the coldata
+coldata <- as.data.frame(colData(experimentSummary$rnaseq))
+
+# One option to read is from the experimentSummary 
+# But this doesn't have the gene name
+# countdata <- assay(experimentSummary$rnaseq)
+
+# Second option is to read the raw counts from Atlas with the gene name
+countdata <- read_tsv("E-GEOD-78936-raw-counts.tsv") 
+```
+# Import libraries
+```{r}
+library(dplyr);
+library(pathfindR);
+```
+
+# Read the results for exp1-6 significant genes (no normalization)
+```{r}
+# data for up, down regulated genes in experiments 1,3,5 
+# (1-6 but no significant genes in 2,4,6)
+# (the only ones who have significant genes expression)
+exp1_3_5_data <- read_csv('significant_genes_by_experiment_no_norm.csv')
+# data separated by experiment
+exp1_data <- exp1_3_5_data[which(exp1_3_5_data$Exp == 1), ]
+exp3_data <- exp1_3_5_data[which(exp1_3_5_data$Exp == 3), ]
+exp5_data <- exp1_3_5_data[which(exp1_3_5_data$Exp == 5), ]
+```
+
+# Run pathfindR analysis
+```{r}
+for (df in list(exp1_3_5_data, exp1_data, exp3_data, exp5_data)) {
+  data <-
+    as.data.frame(df %>% select('Gene.symbol', 'logFC', 'adj.P.Val'))
+  pathfindr_res <-
+    run_pathfindR(
+      data,
+      gene_sets = "KEGG",
+      output_dir = paste(
+        "pathfindR_Results_exp_",
+        paste(unique(as.data.frame(df)$Exp), collapse = '_'),
+        sep = ''
+      )
+    )
+
+  enrichment_chart(RA_clustered, plot_by_cluster = TRUE)
+  RA_clustered <- cluster_enriched_terms(pathfindr_res)
+  
+  # Plot Enrichment Plot
+  plot_path <- paste(
+    paste(
+      "pathfindR_Results_exp_",
+      paste(unique(as.data.frame(df)$Exp), collapse = '_'),
+      sep = ''
+    ),
+    "/enrichment_plot.tiff",
+    collapse = "",
+    sep = ""
+  )
+  tiff(
+    plot_path,
+    compression = "lzw",
+    res = 144,
+    width = 960,
+    height = 960
+  )
+  
+  enrichment_plot <-
+    enrichment_chart(RA_clustered, plot_by_cluster = TRUE)
+  
+  print(enrichment_plot)
+  dev.off()
+  
+  term_plot <- term_gene_graph(result_df = pathfindr_res)
+  print(term_plot)
+}
+```
+
+# Pathway enrichment analysis with general housekeeping genes
+```{r}
+# only exp1 got significant genes
+exp1_general_data <- read_csv('significant_genes_by_experiment_general.csv')
+df <- exp1_general_data
+data <-
+    as.data.frame(df %>% select('Gene.symbol', 'logFC', 'adj.P.Val'))
+  pathfindr_res <-
+    run_pathfindR(
+      data,
+      gene_sets = "KEGG",
+      output_dir = paste(
+        "pathfindR_Results_exp_",
+        paste(unique(as.data.frame(df)$Exp), collapse = '_'),
+        "_general",
+        sep = ''
+      )
+    )
+  
+  enrichment_chart(RA_clustered, plot_by_cluster = TRUE)
+  RA_clustered <- cluster_enriched_terms(pathfindr_res)
+  
+  # Plot Enrichment Plot
+  plot_path <- paste(
+    paste(
+      "pathfindR_Results_exp_",
+      paste(unique(as.data.frame(df)$Exp), collapse = '_'),
+      "_general",
+      sep = ''
+    ),
+    "/enrichment_plot.tiff",
+    collapse = "",
+    sep = ""
+  )
+  tiff(
+    plot_path,
+    compression = "lzw",
+    res = 144,
+    width = 960,
+    height = 960
+  )
+  
+  enrichment_plot <-
+    enrichment_chart(RA_clustered, plot_by_cluster = TRUE)
+  
+  print(enrichment_plot)
+  dev.off()
+  
+  term_plot <- term_gene_graph(result_df = pathfindr_res)
+  print(term_plot)
+```
+
+# Pathway enrichment analysis with brain housekeeping genes
+```{r}
+# only exp1 got significant genes
+exp1_brain_data <- read_csv('significant_genes_by_experiment_brain.csv')
+df <- exp1_brain_data
+data <-
+    as.data.frame(df %>% select('Gene.symbol', 'logFC', 'adj.P.Val'))
+  pathfindr_res <-
+    run_pathfindR(
+      data,
+      gene_sets = "KEGG",
+      output_dir = paste(
+        "pathfindR_Results_exp_",
+        paste(unique(as.data.frame(df)$Exp), collapse = '_'),
+        "_brain",
+        sep = ''
+      )
+    )
+  
+  enrichment_chart(RA_clustered, plot_by_cluster = TRUE)
+  RA_clustered <- cluster_enriched_terms(pathfindr_res)
+  
+  # Plot Enrichment Plot
+  plot_path <- paste(
+    paste(
+      "pathfindR_Results_exp_",
+      paste(unique(as.data.frame(df)$Exp), collapse = '_'),
+      "_brain",
+      sep = ''
+    ),
+    "/enrichment_plot.tiff",
+    collapse = "",
+    sep = ""
+  )
+  tiff(
+    plot_path,
+    compression = "lzw",
+    res = 144,
+    width = 960,
+    height = 960
+  )
+  
+  enrichment_plot <-
+    enrichment_chart(RA_clustered, plot_by_cluster = TRUE)
+  
+  print(enrichment_plot)
+  dev.off()
+  
+  term_plot <- term_gene_graph(result_df = pathfindr_res)
+  print(term_plot)
+```

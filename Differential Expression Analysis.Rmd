@@ -1,0 +1,596 @@
+---
+title: "Introduction to Bioinformatics Final Project 236523"
+author: "Ben Filiarsky 207941287, Yotam Martin 308044296"
+output:
+  html_notebook: default
+---
+
+# Load data
+```{r message=FALSE, warning=FALSE}
+library(R.utils);
+library(tidyverse);
+library(SummarizedExperiment);
+
+# Load summary of the expression results 
+load("E-GEOD-78936-atlasExperimentSummary.Rdata")
+
+# Get the coldata
+coldata <- as.data.frame(colData(experimentSummary$rnaseq))
+
+# One option to read is from the experimentSummary 
+# But this doesn't have the gene name
+# countdata <- assay(experimentSummary$rnaseq)
+
+# Second option is to read the raw counts from Atlas with the gene name
+countdata <- read_tsv("E-GEOD-78936-raw-counts.tsv") 
+```
+
+# Arrange data
+```{r}
+# Change brain regions name to a shorter description
+coldata <-
+  coldata %>% mutate(region = ifelse(
+    organism_part == 'Brodmann (1909) area 11', 'BA11',
+    ifelse(organism_part == 'Brodmann (1909) area 9', 'BA9', 'BA24')
+  ))
+coldata$organism_part <- NULL
+
+# Replace space with underscore in disease name
+coldata$disease <- gsub(" ", "_", coldata$disease)
+```
+
+# Filter data function
+```{r}
+# A function to slice the data for a relevant analysis
+select_samples <- function(status, regions, counts_, coldata_) {
+  # Filter the coldata to relevant disease status and brain region
+  new_coldata <- coldata_ %>%
+    filter((disease %in% status) &
+             region %in% regions)
+  # Set levels
+  new_coldata$disease <-
+    relevel(factor(new_coldata$disease), "normal")
+  
+  # Get only relevant columns
+  new_counts <-
+    counts_ %>% select(c('GeneID', 'GeneName', rownames(new_coldata)))
+  
+  # Set the GeneID to be the index and concate the GeneName to the GeneID
+  new_counts <-
+    mutate(new_counts, GeneId = paste(GeneID, GeneName, sep = "_"))
+  new_counts <-
+    new_counts %>% remove_rownames %>% column_to_rownames(var = "GeneId") %>% as.data.frame()
+  
+  # Delete GeneID, GeneName, GeneId columns
+  new_counts[["GeneID"]] <- NULL
+  new_counts[["GeneName"]] <- NULL
+  new_counts[["GeneId"]] <- NULL
+  
+  return(list(countdata = new_counts,
+              coldata = new_coldata))
+}
+```
+
+# Import libraries
+```{r}
+library(DESeq2);
+library(ggplot2);
+library(ggrepel);
+library(pheatmap);
+library(Rtsne);
+library(ggpubr);
+
+
+if ("fastman" %in% rownames(installed.packages()) == FALSE) {
+  pacman::p_load("remotes")
+  remotes::install_github("danioreo/fastman")
+}
+library(fastman);
+
+
+if ("RUVSeq" %in% rownames(installed.packages()) == FALSE) {
+  BiocManager::install('RUVSeq')
+}
+library(RUVSeq);
+```
+
+# Gene expression analysis function
+```{r}
+# A function that runs analysis for every experiment
+# The analysis includes: 
+# 1. Volcano
+# 2. Heatmap Up/Down-regulated
+# 3. tSNE & KMeans clustering
+# 4. QQ plot
+run_analysis_for_data <- function(selected_data,
+                                  experiment,
+                                  up.down.reg,
+                                  norm=NA) {
+  exp_diseases <- experiment[[1]] # e.g. c("schizophrenia", "normal")
+  exp_regions <- experiment[[2]] # e.g. c("BA9")
+  exp_number <- experiment[[3]] # e.g. "Exp. 1"
+  
+  if (!is.na(norm)) {
+    if (norm == 'general') {
+      control_genes <- read_csv("housekeeping_general.csv")
+    }
+    if (norm == 'brain') {
+      control_genes <- read_csv("housekeeping_brain.csv")
+    }
+    # Arrange data 
+    selected_genes <- data.frame("GeneID"=rownames(selected_data$countdata))
+    # Get the gene Ensmbl ids
+    selected_genes_split <- vapply(strsplit(selected_genes$GeneID,"_"),
+                             `[`, 1, FUN.VALUE=character(1))
+    # Change rownames
+    selected_data$countdata <- selected_data$countdata %>%
+      mutate(GeneID=selected_genes_split) %>%
+      remove_rownames() %>%
+      column_to_rownames(var = "GeneID") %>%
+      as.data.frame()
+    
+    # Find housekeeping genes in our own data
+    control_genes <- intersect(control_genes$GeneID, selected_genes_split)
+    
+    # Normalize data according to the housekeeping genes
+    if (length(control_genes) > 0) {
+      processed <- tryCatch({
+        RUVg(as.matrix(selected_data$countdata), control_genes, k = 1)
+      },
+      error  =  function(e) {
+        print(paste("Error occured in: ", exp_number, 'norm =', norm))
+        print(e)
+        return(NA)
+      })
+      if (!is.na(processed)){
+        selected_data$countdata <- processed$normalizedCounts
+      }
+    }
+    
+    # Arrange rownames back
+    rownames(selected_data$countdata) <- selected_genes$GeneID
+  }
+  dds <- DESeqDataSetFromMatrix(countData = selected_data$countdata,
+                              colData = selected_data$coldata,
+                              design = ~ disease)
+  print(paste("# Genes before count filtering:", nrow(dds)))
+  dds <- dds[rowSums(counts(dds)) > 1,]
+  print(paste("# Genes with row count > 1:", nrow(dds)))
+  
+  dds_analysis <- DESeq(dds)
+  
+  res <- results(dds_analysis, alpha = 0.1) 
+  
+  # Save DE analysis results
+  csv_path <- paste(
+    gsub(" ", "", gsub("[.]", "", tolower(exp_number))),
+    paste(ifelse(is.na(norm), "no_norm", norm)),
+    paste(exp_diseases, collapse = " VS. "),
+    paste(exp_regions, collapse = ","),
+    ".csv"
+  )
+  write.csv(
+    as.data.frame(res),
+    paste("Differential Expression results/", str_trim(csv_path),
+          sep = ''),
+    row.names = T
+  )
+  
+  print(summary(res))
+  
+  print(table(res$padj < 0.05))
+  
+  
+  #  ----------------------- Volcano plot  -----------------------
+
+  res$minus_log10_padj = -log10(res$padj)
+  df <- data.frame(res)
+
+  # Categorize the genes differential expression to {Not Sig, Up, Down}
+  df$DiffExpressed <- "Not Sig"
+  # if log2Foldchange > 0 and padj < 0.05, set as "Up"
+  df$DiffExpressed[df$log2FoldChange > 0 & df$padj < 0.05] <- "Up"
+  # if log2Foldchange < 0 and padj < 0.05, set as "Down"
+  df$DiffExpressed[df$log2FoldChange < 0 & df$padj < 0.05] <- "Down"
+
+  # Add GeneId column from the rownames
+  df$GeneId <- rownames(df)
+
+  # Split the GeneId from the GeneName (in formati: GeneId_GeneName)
+  df <- df %>% separate(GeneId, c(NA, "GeneId"), sep = "_")
+
+  # Give labels according to Up / Down regulated
+  df$delabel <- NA
+  df$delabel[df$DiffExpressed != "Not Sig"] <-
+    df$GeneId[df$DiffExpressed != "Not Sig"]
+
+  # Change colors
+  mycolors <- c("#619CFF", "#F8766D", "#000000")
+  names(mycolors) <- c("Up", "Down", "Not Sig")
+
+  # Plot volcano
+  plot_path <- paste(
+    'DifferentialExpressionPlots/Volcano/',
+    gsub(" ", "", gsub("[.]", "", tolower(exp_number))),
+    "/",
+    paste(ifelse(is.na(norm), "no_norm", norm)),
+    ".tiff",
+    collapse = "",
+    sep = ""
+  )
+  tiff(plot_path, compression = "lzw", res=144, width=960, height=960)
+
+  volcano <-
+    ggplot(data = df,
+           aes(
+             x = log2FoldChange,
+             y = minus_log10_padj,
+             col = DiffExpressed,
+             label = delabel
+             )) +
+    geom_point() +
+    geom_text_repel(show.legend = F) +
+    scale_colour_manual(values = mycolors)  +
+    ggtitle(paste(
+      "Volcano",
+      exp_number,
+      "-",
+      paste(exp_diseases, collapse = " VS. "),
+      "in region(s)",
+      paste(exp_regions, collapse = ",")
+    ))
+
+  # Delete created columns
+  df[["GeneId"]] <- NULL
+  df[["DiffExpressed"]] <- NULL
+  df[["delabel"]] <- NULL
+
+  print(volcano)
+  dev.off()
+
+  # ----------------------- Heatmap Down-regulated plot -----------------------
+
+  count_df <- as.data.frame(selected_data$countdata)
+  coldata_df <- coldata %>% select(disease)
+  down.reg <-
+    res[which((res$padj < 0.05) & (res$log2FoldChange < 0)),]
+
+  if (nrow(down.reg) > 1) {
+    down.top30 <- head(down.reg[order(down.reg$log2FoldChange), ], 30)
+    down.gen.names <- rownames(down.top30)
+    down.top30.counts <-
+      filter(count_df, rownames(count_df) %in% down.gen.names)
+
+    # Scale by row
+    scaled.scores <- t(scale(t(down.top30.counts)))
+
+    # Arrange rownames for the plot
+    genenames_df = as.data.frame(rownames(scaled.scores))
+    colnames(genenames_df) <- c("GeneId")
+    genenames_df <-
+      genenames_df %>% separate(GeneId, c(NA, "GeneId"), sep = "_")
+    rownames(scaled.scores) <- genenames_df$GeneId
+
+    # Populate dataframe
+    if (!is.null(up.down.reg)) {
+      up.down.reg[exp_number, "down.reg"] = paste(genenames_df$GeneId, collapse = ", ")
+    }
+
+    plot_path <- paste(
+      'DifferentialExpressionPlots/Heatmap_down/',
+      gsub(" ", "", gsub("[.]", "", tolower(exp_number))),
+      "/",
+      paste(ifelse(is.na(norm), "no_norm", norm)),
+      ".tiff",
+      collapse = "",
+      sep = ""
+    )
+    tiff(plot_path, compression = "lzw", res=144, width=960, height=960)
+
+    # Heatmap plot
+    heatmap <- pheatmap(
+      scaled.scores,
+      annotation_col = coldata_df,
+      fontsize = 8,
+      fontsize_row = 7,
+      main = paste(
+        "Heatmap",
+        exp_number,
+        "- Downregulated in",
+        paste(exp_diseases, collapse = " VS. "),
+        "in region(s)",
+        paste(exp_regions, collapse = ",")
+      )
+    )
+
+    print(heatmap)
+    dev.off()
+  }
+  #  ----------------------- Heatmap Up-regulated plot  -----------------------
+
+  count_df <- as.data.frame(selected_data$countdata)
+  coldata_df <- coldata %>% select(disease)
+  up.reg <- res[which((res$padj < 0.05) & (res$log2FoldChange > 0)),]
+
+  if (nrow(up.reg) > 1) {
+    up.top30 <-
+      head(up.reg[order(up.reg$log2FoldChange, decreasing = T), ], 30)
+    up.gen.names <- rownames(up.top30)
+    up.top30.counts <-
+      filter(count_df, rownames(count_df) %in% up.gen.names)
+
+    # Scale by row
+    scaled.scores <- t(scale(t(up.top30.counts)))
+
+    # Arrange rownames for the plot
+    genenames_df = as.data.frame(rownames(scaled.scores))
+    colnames(genenames_df) <- c("GeneId")
+    genenames_df <-
+      genenames_df %>% separate(GeneId, c(NA, "GeneId"), sep = "_")
+    rownames(scaled.scores) <- genenames_df$GeneId
+
+    # Populate dataframe
+    if (!is.null(up.down.reg)) {
+      up.down.reg[exp_number, "up.reg"] = paste(genenames_df$GeneId, collapse = ", ")
+    }
+
+    plot_path <- paste(
+      'DifferentialExpressionPlots/Heatmap_up/',
+      gsub(" ", "", gsub("[.]", "", tolower(exp_number))),
+      "/",
+      paste(ifelse(is.na(norm), "no_norm", norm)),
+      ".tiff",
+      collapse = "",
+      sep = ""
+    )
+    tiff(plot_path, compression = "lzw", res=144, width=960, height=960)
+
+    # Heatmap plot
+    heatmap <- pheatmap(
+      scaled.scores,
+      annotation_col = coldata_df,
+      fontsize = 8,
+      fontsize_row = 7,
+      main = paste(
+        "Heatmap",
+        exp_number,
+        "- Upregulated in",
+        paste(exp_diseases, collapse = " VS. "),
+        "in region(s)",
+        paste(exp_regions, collapse = ",")
+      )
+    )
+
+    print(heatmap)
+    dev.off()
+  }
+  #  ----------------------- TSNE, Clustering  -----------------------
+
+  # TSNE
+  set.seed(7)
+  tsne <- Rtsne(t(selected_data$countdata), perplexity = 1)
+  selected_data$coldata$tsne.x <- tsne$Y[,1]
+  selected_data$coldata$tsne.y <- tsne$Y[,2]
+
+  # Cluster count data
+  set.seed(7)
+  k.means <- kmeans(t(selected_data$countdata), centers=2, nstart=10)
+  selected_data$coldata$cluster <- factor(k.means$cluster)
+
+  plot_path <- paste(
+    'DifferentialExpressionPlots/Kmeans_tSNE/',
+    gsub(" ", "", gsub("[.]", "", tolower(exp_number))),
+    "/",
+    paste(ifelse(is.na(norm), "no_norm", norm)),
+    ".tiff",
+    collapse = "",
+    sep = ""
+  )
+  tiff(plot_path, compression = "lzw", res=144, width=960, height=960)
+
+  clustering <- ggscatter(
+    selected_data$coldata,
+    x = "tsne.x",
+    y = "tsne.y",
+    color = "cluster",
+    palette = "npg",
+    ellipse = TRUE,
+    ellipse.type = "convex",
+    shape = "disease",
+    size = 3,
+    legend = "right",
+    ggtheme = theme_bw(),
+    title = paste(
+      "KMeans clusters",
+      exp_number,
+      "-",
+      paste(exp_diseases, collapse = " VS. "),
+      "in region(s)",
+      paste(exp_regions, collapse = ",")
+    )
+  )
+
+  print(clustering)
+  dev.off()
+
+  #  ----------------------- QQ plot  -----------------------
+  
+  # Pay attention that for some reason the qq plot
+  # will not be saved if the other plots are running too (so comment the other plots)
+
+  qq_plot_data <- res[which((!is.na(res$pvalue))),]
+  plot_path <- paste(
+    'DifferentialExpressionPlots/QQ/',
+    gsub(" ", "", gsub("[.]", "", tolower(exp_number))),
+    "/",
+    paste(ifelse(is.na(norm), "no_norm", norm)),
+    ".tiff",
+    collapse = "",
+    sep = ""
+  )
+  tiff(plot_path, compression = "lzw", res=144, width=960, height=960)
+
+  qq <- fastman::fastqq(
+    qq_plot_data,
+    p = "pvalue",
+    lambda = T,
+    main = paste(
+      "Q-Q plot",
+      exp_number,
+      "-",
+      paste(exp_diseases, collapse = " VS. "),
+      "in region(s)",
+      paste(exp_regions, collapse = ",")
+    )
+  )
+
+  qq
+  dev.off()
+
+  return(up.down.reg)
+}
+```
+
+# Compare BD / SZ vs. control patients in every brain region
+```{r}
+exp1 <- list(c("schizophrenia", "normal"), c("BA9"), "Exp. 1")
+exp2 <- list(c("schizophrenia", "normal"), c("BA11"), "Exp. 2")
+exp3 <- list(c("schizophrenia", "normal"), c("BA24"), "Exp. 3")
+exp4 <- list(c("bipolar_disorder", "normal"), c("BA9"), "Exp. 4")
+exp5 <- list(c("bipolar_disorder", "normal"), c("BA11"), "Exp. 5")
+exp6 <- list(c("bipolar_disorder", "normal"), c("BA24"), "Exp. 6")
+
+# Try 3 different ways to normalize the count data
+# no normalization, housekeeping genes in general / brain
+for (norm in c(NA, "general", "brain")) {
+  # A table to collect Up / Down regulated genes for every experiment
+  up.down.reg <- data.frame(up.reg = c("", "", "", "", "", ""),
+                            down.reg = c("", "", "", "", "", ""))
+  # Modify rownames for dataframe
+  rownames(up.down.reg) <-
+    c("Exp. 1", "Exp. 2", "Exp. 3", "Exp. 4", "Exp. 5", "Exp. 6")
+  
+  for (experiment in list(exp1, exp2, exp3, exp4, exp5, exp6)) {
+    print(
+      paste(
+        "************** Experiment:",
+        experiment[[1]][1] ,
+        "VS.",
+        experiment[[1]][2],
+        "in region(s):" ,
+        experiment[[2]] ,
+        "**************"
+      )
+    )
+    selected_data <- select_samples(
+      status = experiment[[1]],
+      regions = experiment[[2]],
+      counts_ = countdata,
+      coldata_ = coldata
+    )
+    
+    res <- run_analysis_for_data(selected_data,
+                                 experiment,
+                                 up.down.reg,
+                                 norm)
+    
+    if (!is.null(res)){
+      up.down.reg <- res
+    }
+  }
+  
+  # Write Up / Down regulated genes to .csv file
+  write.csv(
+    up.down.reg,
+    paste(
+      "up_down_reg_genes_per_experiment",
+      paste(ifelse(
+        is.na(norm), "", paste("_", norm, sep = '')
+      )),
+      ".csv",
+      collapse = "",
+      sep = ""
+    ),
+    row.names = T
+  )
+}
+```
+
+# External experiments
+```{r}
+exp7 <- list(c("schizophrenia", "normal"), c("BA9", "BA11"), "Exp. 7")
+exp8 <- list(c("schizophrenia", "normal"), c("BA9", "BA24"), "Exp. 8")
+exp9 <- list(c("schizophrenia", "normal"), c("BA11", "BA24"), "Exp. 9")
+exp10 <- list(c("bipolar_disorder", "normal"), c("BA9", "BA11"), "Exp. 10")
+exp11 <- list(c("bipolar_disorder", "normal"), c("BA9", "BA24"), "Exp. 11")
+exp12 <- list(c("bipolar_disorder", "normal"), c("BA11", "BA24"), "Exp. 12")
+exp13 <- list(c("schizophrenia", "normal"), c("BA9", "BA11", "BA24"), "Exp. 13")
+exp14 <- list(c("bipolar_disorder", "normal"), c("BA9", "BA11", "BA24"), "Exp. 14")
+
+for (experiment in list(exp7, exp8, exp9, exp10, exp11, exp12, exp13, exp14)) {
+  print(
+    paste(
+      "************** Experiment:",
+      experiment[[1]][1] ,
+      "VS.",
+      experiment[[1]][2],
+      "in region(s):" ,
+      paste(experiment[[2]], collapse = ", "),
+      "**************"
+    )
+  )
+  selected_data <- select_samples(
+    status = experiment[[1]],
+    regions = experiment[[2]],
+    counts_ = countdata,
+    coldata_ = coldata
+  )
+  
+  run_analysis_for_data(
+    selected_data = selected_data,
+    experiment = experiment,
+    up.down.reg = NULL
+  )
+}
+```
+
+# Disease vs Normal experiments
+```{r}
+# Change disease names to be the same (no matter if BD or SZ)
+coldata <-
+  coldata %>% mutate(disease = ifelse(disease == 'normal', 'normal', 'disease'))
+
+exp15 <- list(c("disease", "normal"), c("BA9", "BA11", "BA24"), "Exp. 15")
+exp16 <- list(c("disease", "normal"), c("BA9"), "Exp. 16")
+exp17 <- list(c("disease", "normal"), c("BA11"), "Exp. 17")
+exp18 <- list(c("disease", "normal"), c("BA24"), "Exp. 18")
+
+for (norm in c(NA, "general", "brain")) {
+  for (experiment in list(exp15, exp16, exp17, exp18)) {
+    print(
+      paste(
+        "************** Experiment:",
+        experiment[[1]][1] ,
+        "VS.",
+        experiment[[1]][2],
+        "in region(s):" ,
+        paste(experiment[[2]], collapse = ", "),
+        "**************"
+      )
+    )
+    selected_data <- select_samples(
+      status = experiment[[1]],
+      regions = experiment[[2]],
+      counts_ = countdata,
+      coldata_ = coldata
+    )
+    
+    run_analysis_for_data(
+      selected_data = selected_data,
+      experiment = experiment,
+      up.down.reg = NULL,
+      norm = norm
+    )
+  }
+}
+```
