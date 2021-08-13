@@ -14,10 +14,10 @@ Schizophrenia (SZ) and Bipolar Disorder (BD) are serious neuropsychiatric disord
 │   │   ├── exp1 brain schizophrenia VS. normal BA9 .csv
 │   │   ├── ...
 │   │   └── exp6 brain bipolar_disorder VS. normal BA24 .csv
-│   ├── Differential Expression results kidney norm
-│   │   ├── exp1 kidney schizophrenia VS. normal BA9 .csv
+│   ├── Differential Expression results general norm
+│   │   ├── exp1 general schizophrenia VS. normal BA9 .csv
 │   │   ├── ...
-│   │   └── exp6 kidney bipolar_disorder VS. normal BA24 .csv
+│   │   └── exp6 general bipolar_disorder VS. normal BA24 .csv
 │   ├── Differential Expression results no norm
 │   │   ├── exp1 no_norm schizophrenia VS. normal BA9 .csv
 │   │   ├── ...
