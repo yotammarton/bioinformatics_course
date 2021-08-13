@@ -6,8 +6,8 @@ import os
 
 
 raw_counts = pd.read_csv('E-GEOD-78936-raw-counts.tsv', sep='\t').set_index('GeneName')
-norm = ''  # choice from ['', '_kidney', '_brain']
-for norm in ['', '_kidney', '_brain']:
+norm = ''  # choice from ['', '_general', '_brain']
+for norm in ['', '_general', '_brain']:
     dir = 'Differential Expression results'
     dir = (dir + " " + norm[1:] + ' norm') if norm else 'Differential Expression results no norm'
     significant = pd.read_csv(f'up_down_reg_genes_per_experiment{norm}.csv')
