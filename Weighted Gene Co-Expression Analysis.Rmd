@@ -289,7 +289,7 @@ for (i in 1:nrow(options)) {
   multiExpr <- preprocess_res$multiExpr
   exprSize <- preprocess_res$exprSize
   status_region <- paste(status, region, sep = "_")
-  net_file <- paste("Nets/net_", status_region, ".RData", sep = "")
+  net_file <- paste("Weighted Gene Co-Expression Analysis/Nets/net_", status_region, ".RData", sep = "")
   if (!file.exists(net_file)) {
     net <- train_net(multiExpr[[2]]$data,
                      file_name = net_file,
@@ -343,7 +343,7 @@ for (i in 1:nrow(options)) {
         nrow(ego@result[which(ego@result$p.adjust < ego@pvalueCutoff), ]) > 0) {
       png(
         file = paste(
-          "Plots/GO/",
+          "Weighted Gene Co-Expression Analysis/Plots/GO/",
           i,
           "/",
           status_region,
@@ -364,7 +364,7 @@ for (i in 1:nrow(options)) {
         nrow(edo@result[which(edo@result$p.adjust < edo@pvalueCutoff), ]) > 0) {
       png(
         file = paste(
-          "Plots/DO/",
+          "Weighted Gene Co-Expression Analysis/Plots/DO/",
           i,
           "/",
           status_region,
