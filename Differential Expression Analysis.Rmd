@@ -162,16 +162,19 @@ run_analysis_for_data <- function(selected_data,
   res <- results(dds_analysis, alpha = 0.1) 
   
   # Save DE analysis results
-  csv_path <- paste(
+  csv_path <- gsub(" exp", "exp", paste(
+    "Differential Expression results",
+    paste(ifelse(is.na(norm), "no norm/", norm),
+          ifelse(is.na(norm), "", " norm/"), sep = ""),
     gsub(" ", "", gsub("[.]", "", tolower(exp_number))),
     paste(ifelse(is.na(norm), "no_norm", norm)),
     paste(exp_diseases, collapse = " VS. "),
     paste(exp_regions, collapse = ","),
     ".csv"
-  )
+  ))
   write.csv(
     as.data.frame(res),
-    paste("Differential Expression results/", str_trim(csv_path),
+    paste("Differential Expression Analysis/", str_trim(csv_path),
           sep = ''),
     row.names = T
   )
@@ -210,7 +213,7 @@ run_analysis_for_data <- function(selected_data,
 
   # Plot volcano
   plot_path <- paste(
-    'DifferentialExpressionPlots/Volcano/',
+    'Differential Expression Analysis/DifferentialExpressionPlots/Volcano/',
     gsub(" ", "", gsub("[.]", "", tolower(exp_number))),
     "/",
     paste(ifelse(is.na(norm), "no_norm", norm)),
@@ -277,7 +280,7 @@ run_analysis_for_data <- function(selected_data,
     }
 
     plot_path <- paste(
-      'DifferentialExpressionPlots/Heatmap_down/',
+      'Differential Expression Analysis/DifferentialExpressionPlots/Heatmap_down/',
       gsub(" ", "", gsub("[.]", "", tolower(exp_number))),
       "/",
       paste(ifelse(is.na(norm), "no_norm", norm)),
@@ -335,7 +338,7 @@ run_analysis_for_data <- function(selected_data,
     }
 
     plot_path <- paste(
-      'DifferentialExpressionPlots/Heatmap_up/',
+      'Differential Expression Analysis/DifferentialExpressionPlots/Heatmap_up/',
       gsub(" ", "", gsub("[.]", "", tolower(exp_number))),
       "/",
       paste(ifelse(is.na(norm), "no_norm", norm)),
@@ -378,7 +381,7 @@ run_analysis_for_data <- function(selected_data,
   selected_data$coldata$cluster <- factor(k.means$cluster)
 
   plot_path <- paste(
-    'DifferentialExpressionPlots/Kmeans_tSNE/',
+    'Differential Expression Analysis/DifferentialExpressionPlots/Kmeans_tSNE/',
     gsub(" ", "", gsub("[.]", "", tolower(exp_number))),
     "/",
     paste(ifelse(is.na(norm), "no_norm", norm)),
@@ -420,7 +423,7 @@ run_analysis_for_data <- function(selected_data,
 
   qq_plot_data <- res[which((!is.na(res$pvalue))),]
   plot_path <- paste(
-    'DifferentialExpressionPlots/QQ/',
+    'Differential Expression Analysis/DifferentialExpressionPlots/QQ/',
     gsub(" ", "", gsub("[.]", "", tolower(exp_number))),
     "/",
     paste(ifelse(is.na(norm), "no_norm", norm)),
