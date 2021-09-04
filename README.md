@@ -1,4 +1,4 @@
-# 236523 - Introduction to Bioinformatics 
+# 236523 - Introduction to Bioinformatics
 ## ![image](https://user-images.githubusercontent.com/43007010/129244877-92615d82-ad39-429d-ad8d-f5eb8c5be091.png)
 
 Ben Filiarsky	, Yotam Martin
